@@ -7,14 +7,8 @@
     const nodePath = require('path');
     const colors = require('colors');
 
-    // Yes, this is extremely ad hoc using text comparison for git, but I haven't found
-    // a better way so far.
-    const BRANCH_UP_TO_DATE = 'Din gren är à jour med';
-    const CHANGES_NOT_IN_QUEUE = 'Ändringar ej i incheckningskön';
-    const CHANGES_TO_COMMIT = 'Ändringar att checka in';
-
     /**
-     * @param rootDirectory, path to directory containing sub directories with repositories.
+     * @param string rootDirectory, path to directory containing sub directories with repositories.
      * @returns array with git repositories.
      */
     function getGitRepositories(rootDirectory) {
@@ -39,41 +33,66 @@
     }
 
     /**
-     * @param gitDirectory containing a valid path to a .git directory.
+     * @param string gitDirectory containing a valid path to a .git directory.
      * @returns nothing
      */
     function verifyAndUpdateRepository(gitDirectory) {
         let workDirectory = gitDirectory.slice(0, -4);
-        let run = 'git --git-dir ' + gitDirectory + ' remote update';
+        let run = 'git --git-dir ' + gitDirectory + ' fetch';
+        let ahead = 0;
+        let behind = 0;
 
-        nodeExec(run, function updateRepository(error, stdOut, stdErr) {
+        nodeExec(run, (error, stdOut, stdErr) => {
+            let run;
+            let message = '';
             if (error === null) {
-                let run = 'git --git-dir ' + gitDirectory + ' --work-tree ' + workDirectory + ' status -uno';
-                nodeExec(run, function checkRepositoryStatus(error, stdOut, stdErr) {
-                    process.stdout.write('Checking ' + workDirectory.green + ' ');
+                message = 'Checking ' + workDirectory.green + '... ';
 
-                    let upToDate = stdOut.indexOf(BRANCH_UP_TO_DATE) > -1;
-                    let localChanges = stdOut.indexOf(CHANGES_NOT_IN_QUEUE) > -1;
-                    localChanges = localChanges || stdOut.indexOf(CHANGES_TO_COMMIT) > -1;
-
-                    if (!upToDate && localChanges) {
-                        process.stdout.write('[need sync]'.red);
-                    }
-                    if (upToDate && !localChanges) {
-                        process.stdout.write('[ok]');
-                    }
-                    if (localChanges) {
-                        process.stdout.write('[uncommited files]');
-                    }
-                    process.stdout.write('\n');
-
-                    if (!upToDate && !localChanges) {
-                        let run = 'git --git-dir ' + gitDirectory + ' --work-tree ' + workDirectory + ' pull';
-                        nodeExec(run, function pullUpdatesFromRemote(error, stdOut, stdErr) {
-                            if (error === null) {
-                                console.log(stdOut);
+                run = 'git --git-dir ' + gitDirectory + ' --work-tree ' + workDirectory + ' rev-list --count origin/develop..develop';
+                nodeExec(run, (error, stdOut, stdErr) => {
+                    if (error) {
+                        console.log(message + '[ahead error (no develop branch?)]'.red);
+                    } else {
+                        ahead = parseInt(stdOut);
+                        if (ahead > 0) {
+                            message += '[ahead: ' + ahead + ']';
+                        }
+                        run = 'git --git-dir ' + gitDirectory + ' --work-tree ' + workDirectory + ' rev-list --count develop..origin/develop';
+                        nodeExec(run, (error, stdOut, stdErr) => {
+                            if (error) {
+                                console.log(message + '[behind error]'.red);
                             } else {
-                                console.log('An error occurred\n'.red + error + '\n');
+                                behind = parseInt(stdOut);
+                                if (behind > 0) {
+                                    message += '[behind: ' + behind + ']';
+                                }
+                                if (ahead === 0 && behind > 0) {
+                                    message += '[merging]'.yellow;
+
+                                    run = 'git --git-dir ' + gitDirectory + ' --work-tree ' + workDirectory + ' merge --ff-only @{u}';
+                                    nodeExec(run, (error, stdOUt, stdErr) => {
+                                        if (error) {
+                                            message += '[merge error (local changes?)]'.red;
+                                        } else {
+                                            message += '[success]';
+                                        }
+                                    });
+                                } else if (ahead > 0 && behind === 0) {
+                                    message += '[pushing]'.blue;
+                                    run = 'git --git-dir ' + gitDirectory + ' --work-tree ' + workDirectory + ' push';
+                                    nodeExec(run, (error, stdOUt, stdErr) => {
+                                        if (error) {
+                                            message += '[push error]'.red;
+                                        } else {
+                                            message += '[success]';
+                                        }
+                                    });
+                                } else if (ahead > 0 && behind > 0) {
+                                    message += '[manual merge/rebase needed]'.magenta;
+                                } else {
+                                    message += '[ok]';
+                                }
+                                console.log(message);
                             }
                         });
                     }
@@ -82,7 +101,7 @@
         });
     }
 
-    let directories = getGitRepositories('/home/johan/IdeaProjects');
+    let directories = getGitRepositories('/home/johan/projects/stena');
     if (directories.length > 0) {
         directories.forEach(verifyAndUpdateRepository);
     } else {
