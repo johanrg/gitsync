@@ -2,11 +2,23 @@
 
     'use strict';
 
-    const nodeExec = require('child_process').exec;
-    const nodeFs = require('fs');
-    const nodePath = require('path');
-    const colors = require('colors');
+    const ChildProcess = require('child_process').exec;
+    const Fs = require('fs');
+    const Path = require('path');
+    const Colors = require('colors');
 
+    function parseConfig() {
+        try {
+            let data = Fs.readFileSync('./config.json');
+            if (data) {
+                return JSON.parse(data);
+            } else {
+                return null;
+            }
+        } catch (err) {
+            return null;
+        }
+    }
     /**
      * @param string rootDirectory, path to directory containing sub directories with repositories.
      * @returns array with git repositories.
@@ -15,11 +27,11 @@
         let directoriesToReturn = [];
 
         function readDirectory(fromPath) {
-            let files = nodeFs.readdirSync(fromPath);
+            let files = Fs.readdirSync(fromPath);
 
             files.forEach(file => {
-                let currentPath = nodePath.join(fromPath, file);
-                if (nodeFs.statSync(currentPath).isDirectory()) {
+                let currentPath = Path.join(fromPath, file);
+                if (Fs.statSync(currentPath).isDirectory()) {
                     if (file === '.git') {
                         directoriesToReturn.push(currentPath);
                     } else if (file !== 'node_modules') {
@@ -38,18 +50,18 @@
      */
     function verifyAndUpdateRepository(gitDirectory) {
         let workDirectory = gitDirectory.slice(0, -4);
-        let run = 'git --git-dir ' + gitDirectory + ' fetch';
         let ahead = 0;
         let behind = 0;
+        let run;
 
-        nodeExec(run, (error, stdOut, stdErr) => {
-            let run;
+        run = 'git --git-dir ' + gitDirectory + ' fetch';
+        ChildProcess(run, (error, stdOut, stdErr) => {
             let message = '';
             if (error === null) {
                 message = 'Checking ' + workDirectory.green + '... ';
 
                 run = 'git --git-dir ' + gitDirectory + ' --work-tree ' + workDirectory + ' rev-list --count origin/develop..develop';
-                nodeExec(run, (error, stdOut, stdErr) => {
+                ChildProcess(run, function checkIfAhead(error, stdOut, stdErr) {
                     if (error) {
                         console.log(message + '[ahead error (no develop branch?)]'.red);
                     } else {
@@ -57,8 +69,9 @@
                         if (ahead > 0) {
                             message += '[ahead: ' + ahead + ']';
                         }
+
                         run = 'git --git-dir ' + gitDirectory + ' --work-tree ' + workDirectory + ' rev-list --count develop..origin/develop';
-                        nodeExec(run, (error, stdOut, stdErr) => {
+                        ChildProcess(run, function checkIfBehind(error, stdOut, stdErr) {
                             if (error) {
                                 console.log(message + '[behind error]'.red);
                             } else {
@@ -70,23 +83,26 @@
                                     message += '[merging]'.yellow;
 
                                     run = 'git --git-dir ' + gitDirectory + ' --work-tree ' + workDirectory + ' merge --ff-only @{u}';
-                                    nodeExec(run, (error, stdOUt, stdErr) => {
+                                    ChildProcess(run, function mergeChanges(error, stdOUt, stdErr) {
                                         if (error) {
                                             message += '[merge error (local changes?)]'.red;
                                         } else {
                                             message += '[success]';
                                         }
                                     });
+
                                 } else if (ahead > 0 && behind === 0) {
                                     message += '[pushing]'.blue;
+                                    
                                     run = 'git --git-dir ' + gitDirectory + ' --work-tree ' + workDirectory + ' push';
-                                    nodeExec(run, (error, stdOUt, stdErr) => {
+                                    ChildProcess(run, function pushLocalChanges(error, stdOUt, stdErr) {
                                         if (error) {
                                             message += '[push error]'.red;
                                         } else {
                                             message += '[success]';
                                         }
                                     });
+
                                 } else if (ahead > 0 && behind > 0) {
                                     message += '[manual merge/rebase needed]'.magenta;
                                 } else {
@@ -101,11 +117,15 @@
         });
     }
 
-    let directories = getGitRepositories('/home/johan/projects/stena');
-    if (directories.length > 0) {
-        directories.forEach(verifyAndUpdateRepository);
+    let config = parseConfig();
+    if (config) {
+        let directories = getGitRepositories(config.directory);
+        if (directories.length > 0) {
+            directories.forEach(verifyAndUpdateRepository);
+        } else {
+            console.log('No git repos in the path.');
+        }
     } else {
-        console.log('No git repos in the path.');
+        console.log('Could not read the config file.')
     }
-
 } ())
